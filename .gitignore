@@ -1,0 +1,28 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# Virtual environments
+venv/
+.venv/
+.env/
+
+# VS Code
+.vscode/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# HuggingFace / model cache
+.cache/
+hf_cache/
+transformers_cache/
+
+# Big model files
+*.pt
+*.bin
+*.ckpt
+*.safetensors
+
+# Training outputs
+outputs/
