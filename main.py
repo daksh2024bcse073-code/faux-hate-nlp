@@ -10,7 +10,8 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "src"))
 #     from train_roberta import train_roberta
 #     train_roberta(...)
 
-elif args.model == "xlmroberta":
+# elif 
+args.model == "xlmroberta":
     from train_xlmroberta import train_xlmroberta
     train_xlmroberta(...)
 
@@ -66,5 +67,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
