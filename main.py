@@ -6,18 +6,9 @@ import os
 # Add src folder to path
 sys.path.append(os.path.join(os.path.dirname(__file__), "src"))
 
-# if args.model == "roberta":
-#     from train_roberta import train_roberta
-#     train_roberta(...)
-
-# elif 
-args.model == "xlmroberta":
-    from train_xlmroberta import train_xlmroberta
-    train_xlmroberta(...)
-
-# elif args.model == "deberta":
-#     from train_deberta import train_deberta
-#     train_deberta(...)
+# from train_roberta import train_roberta
+from train_xlmroberta import train_xlmroberta
+# from train_deberta import train_deberta
 
 
 def main():
@@ -67,6 +58,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
