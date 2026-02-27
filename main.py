@@ -1,49 +1,57 @@
 import argparse
 import torch
+import sys
 import os
 
-from src.train_roberta import train_roberta
-# Later we will add:
-# from src.train_xlmroberta import train_xlmroberta
-# from src.train_deberta import train_deberta
+# Add src folder to path
+sys.path.append(os.path.join(os.path.dirname(__file__), "src"))
+
+from train_roberta import train_roberta
+from train_xlmroberta import train_xlmroberta
+from train_deberta import train_deberta
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Faux Hate NLP Training")
+    parser = argparse.ArgumentParser()
 
-    parser.add_argument("--model", type=str, required=True, choices=["roberta", "xlmroberta", "deberta"])
+    parser.add_argument("--model", type=str, required=True,
+                        choices=["roberta", "xlmroberta", "deberta"])
     parser.add_argument("--epochs", type=int, default=3)
-    parser.add_argument("--batch_size", type=int, default=8)
+    parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--lr", type=float, default=2e-5)
-    parser.add_argument("--max_len", type=int, default=180)
 
     args = parser.parse_args()
 
-    # Device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print("====================================")
+
+    print("=" * 40)
     print("Using device:", device)
-    print("====================================")
-
-    # Data paths
-    train_file = os.path.join("data", "splits", "train.csv")
-    val_file = os.path.join("data", "splits", "val.csv")
-    test_file = os.path.join("data", "splits", "test.csv")
-
-    output_dir = "outputs"
+    print("=" * 40)
 
     if args.model == "roberta":
         train_roberta(
-            train_file=train_file,
-            val_file=val_file,
-            test_file=test_file,
             epochs=args.epochs,
             batch_size=args.batch_size,
             lr=args.lr,
-            max_len=args.max_len,
-            output_dir=output_dir,
-            device=device,
+            device=device
         )
+
+    elif args.model == "xlmroberta":
+        train_xlmroberta(
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            lr=args.lr,
+            device=device
+        )
+
+    elif args.model == "deberta":
+        train_deberta(
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            lr=args.lr,
+            device=device
+        )
+
     else:
         raise NotImplementedError(f"Model {args.model} not implemented yet!")
 
