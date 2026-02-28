@@ -3,7 +3,8 @@ import json
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from transformers import XLMRobertaModel, XLMRobertaTokenizerFast, AdamW, get_linear_schedule_with_warmup
+from transformers import XLMRobertaModel, XLMRobertaTokenizerFast, get_linear_schedule_with_warmup
+from torch.optim import AdamW
 from tqdm import tqdm
 
 from src.data_utils import FauxHateDataset, IGNORE_INDEX
@@ -171,3 +172,4 @@ def train_xlmroberta(args):
 
     print("Metrics saved to results/metrics/xlmroberta_metrics.json")
     print("Validation Fake Accuracy:", accuracy)
+
