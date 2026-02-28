@@ -7,8 +7,8 @@ import os
 sys.path.append(os.path.join(os.path.dirname(__file__), "src"))
 
 # from train_roberta import train_roberta
-# from train_xlmroberta import train_xlmroberta
-from train_deberta import train_deberta
+from train_xlmroberta import train_xlmroberta
+# from train_deberta import train_deberta
 
 
 def main():
@@ -58,6 +58,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
