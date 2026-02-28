@@ -10,56 +10,58 @@ from tqdm import tqdm
 from src.data_utils import FauxHateDataset, IGNORE_INDEX
 
 
-# ===============================
+# ====================================================
 # Multi-task Model
-# ===============================
+# ====================================================
 
 class XLMRMultiTask(nn.Module):
     def __init__(self, model_name="xlm-roberta-base"):
         super().__init__()
         self.encoder = XLMRobertaModel.from_pretrained(model_name)
 
-        hidden = self.encoder.config.hidden_size
+        hidden_size = self.encoder.config.hidden_size
 
-        self.fake_head = nn.Linear(hidden, 2)
-        self.hate_head = nn.Linear(hidden, 2)
-        self.target_head = nn.Linear(hidden, 3)
-        self.severity_head = nn.Linear(hidden, 3)
+        self.fake_head = nn.Linear(hidden_size, 2)
+        self.hate_head = nn.Linear(hidden_size, 2)
+        self.target_head = nn.Linear(hidden_size, 3)
+        self.severity_head = nn.Linear(hidden_size, 3)
 
     def forward(self, input_ids, attention_mask):
+
         outputs = self.encoder(
             input_ids=input_ids,
             attention_mask=attention_mask
         )
 
-        cls_output = outputs.last_hidden_state[:, 0]
+        cls = outputs.last_hidden_state[:, 0]
 
         return {
-            "fake": self.fake_head(cls_output),
-            "hate": self.hate_head(cls_output),
-            "target": self.target_head(cls_output),
-            "severity": self.severity_head(cls_output),
+            "fake": self.fake_head(cls),
+            "hate": self.hate_head(cls),
+            "target": self.target_head(cls),
+            "severity": self.severity_head(cls),
         }
 
 
-# ===============================
-# Training Function
-# ===============================
+# ====================================================
+# Training Function (MATCHES main.py CALL)
+# ====================================================
 
-def train_xlmroberta(args):
+def train_xlmroberta(epochs, batch_size, lr):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print("=" * 40)
+
+    print("=" * 50)
     print("Using device:", device)
-    print("=" * 40)
+    print("=" * 50)
 
     tokenizer = XLMRobertaTokenizerFast.from_pretrained("xlm-roberta-base")
 
     train_dataset = FauxHateDataset("data/splits/train.csv", tokenizer)
     val_dataset = FauxHateDataset("data/splits/val.csv", tokenizer)
 
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size)
 
     model = XLMRMultiTask().to(device)
 
@@ -69,26 +71,27 @@ def train_xlmroberta(args):
     target_loss_fn = nn.CrossEntropyLoss(ignore_index=IGNORE_INDEX)
     severity_loss_fn = nn.CrossEntropyLoss(ignore_index=IGNORE_INDEX)
 
-    optimizer = AdamW(model.parameters(), lr=args.lr)
+    optimizer = AdamW(model.parameters(), lr=lr)
 
-    total_steps = len(train_loader) * args.epochs
+    total_steps = len(train_loader) * epochs
+
     scheduler = get_linear_schedule_with_warmup(
         optimizer,
         num_warmup_steps=int(0.1 * total_steps),
         num_training_steps=total_steps
     )
 
-    # ===============================
+    # ====================================================
     # TRAIN LOOP
-    # ===============================
+    # ====================================================
 
-    for epoch in range(args.epochs):
+    for epoch in range(epochs):
 
         model.train()
         epoch_loss = 0.0
         valid_batches = 0
 
-        progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{args.epochs}")
+        progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}")
 
         for batch in progress_bar:
 
@@ -111,6 +114,7 @@ def train_xlmroberta(args):
 
             loss = loss_fake + loss_hate + loss_target + loss_severity
 
+            # Safety check
             if torch.isnan(loss):
                 print("NaN detected — skipping batch")
                 continue
@@ -129,18 +133,18 @@ def train_xlmroberta(args):
 
     print("Training complete.")
 
-    # ===============================
+    # ====================================================
     # SAVE MODEL
-    # ===============================
+    # ====================================================
 
     os.makedirs("outputs/xlmroberta", exist_ok=True)
     torch.save(model.state_dict(), "outputs/xlmroberta/model.pt")
 
     print("Model saved to outputs/xlmroberta")
 
-    # ===============================
-    # EVALUATION
-    # ===============================
+    # ====================================================
+    # SIMPLE VALIDATION (Fake task only for now)
+    # ====================================================
 
     model.eval()
     correct = 0
@@ -172,4 +176,3 @@ def train_xlmroberta(args):
 
     print("Metrics saved to results/metrics/xlmroberta_metrics.json")
     print("Validation Fake Accuracy:", accuracy)
-
