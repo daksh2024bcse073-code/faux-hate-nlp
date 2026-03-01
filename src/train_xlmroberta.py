@@ -47,9 +47,9 @@ class XLMRMultiTask(nn.Module):
 # Training Function (MATCHES main.py CALL)
 # ====================================================
 
-def train_xlmroberta(epochs, batch_size, lr):
+def train_xlmroberta(epochs, batch_size, lr, device):
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     print("=" * 50)
     print("Using device:", device)
@@ -176,3 +176,4 @@ def train_xlmroberta(epochs, batch_size, lr):
 
     print("Metrics saved to results/metrics/xlmroberta_metrics.json")
     print("Validation Fake Accuracy:", accuracy)
+
