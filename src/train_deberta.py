@@ -23,7 +23,10 @@ class MultiTaskDeberta(nn.Module):
     def __init__(self, model_name="microsoft/deberta-v3-base"):
         super().__init__()
 
-        self.encoder = DebertaV2Model.from_pretrained(model_name)
+      self.encoder = DebertaV2Model.from_pretrained(
+    "microsoft/deberta-v3-base",
+    torch_dtype=torch.float32
+)
         hidden_size = self.encoder.config.hidden_size
 
         self.dropout = nn.Dropout(0.3)
@@ -85,6 +88,7 @@ def train_deberta(
     val_loader = DataLoader(val_dataset, batch_size=batch_size)
 
     model = MultiTaskDeberta().to(device)
+    model = model.float()
 
     optimizer = AdamW(model.parameters(), lr=lr)
 
@@ -172,3 +176,4 @@ def train_deberta(
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     train_deberta(device=device)
+
