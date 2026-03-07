@@ -5,7 +5,6 @@ import faiss
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-
 from transformers import (
     AutoTokenizer,
     AutoModel,
@@ -16,46 +15,59 @@ from transformers import (
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-# ================================
-# BGE EMBEDDING MODEL
-# ================================
+# ===============================
+# BGE EMBEDDING MODEL (CPU)
+# ===============================
 
 class BGEEmbedder:
 
     def __init__(self, model_name="BAAI/bge-base-en-v1.5"):
-
+        print("Loading BGE embedding model on CPU...")
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = AutoModel.from_pretrained(model_name).to(device)
+        self.model = AutoModel.from_pretrained(model_name).to("cpu")
+        self.model.eval()
 
-    def encode(self, texts):
+    def encode(self, texts, batch_size=32):
 
-        inputs = self.tokenizer(
-            texts,
-            padding=True,
-            truncation=True,
-            return_tensors="pt"
-        ).to(device)
+        embeddings = []
 
-        with torch.no_grad():
-            outputs = self.model(**inputs)
+        for i in tqdm(range(0, len(texts), batch_size), desc="Embedding batches"):
+            batch = texts[i:i+batch_size]
 
-        embeddings = outputs.last_hidden_state[:, 0]
-        return embeddings.cpu().numpy()
+            inputs = self.tokenizer(
+                batch,
+                padding=True,
+                truncation=True,
+                max_length=180,
+                return_tensors="pt"
+            ).to("cpu")
+
+            with torch.no_grad():
+                outputs = self.model(**inputs)
+
+            batch_embeddings = outputs.last_hidden_state[:,0].cpu().numpy()
+            embeddings.append(batch_embeddings)
+
+        embeddings = np.vstack(embeddings)
+
+        return embeddings
 
 
-# ================================
-# LOAD LLM (MISTRAL / LLAMA STYLE)
-# ================================
+# ===============================
+# LOAD MISTRAL (LLM)
+# ===============================
 
 def load_llm():
 
     model_name = "mistralai/Mistral-7B-Instruct-v0.2"
 
+    print("Loading Mistral LLM...")
+
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_compute_dtype=torch.float16,
         bnb_4bit_use_double_quant=True,
-        bnb_4bit_quant_type="nf4",
+        bnb_4bit_quant_type="nf4"
     )
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -69,49 +81,56 @@ def load_llm():
     return tokenizer, model
 
 
-# ================================
-# PROMPT CLASSIFICATION
-# ================================
+# ===============================
+# LLM CLASSIFICATION
+# ===============================
 
-def classify_text(tokenizer, model, text):
+def classify_text(tokenizer, model, text, context):
 
     prompt = f"""
-You are a classifier.
+You are a text classifier.
 
-Classify the following text into:
+Use the retrieved context to help classify the text.
 
-Fake: 0 or 1
-Hate: 0 or 1
-Target: I (Individual), O (Community), R (Religion)
-Severity: L (Low), M (Medium), H (High)
+Context:
+{context}
 
 Text:
 {text}
 
-Return answer in JSON format.
+Return JSON format:
+
+{{
+"Fake": 0 or 1,
+"Hate": 0 or 1,
+"Target": "I" or "O" or "R",
+"Severity": "L" or "M" or "H"
+}}
 """
 
     inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
 
     with torch.no_grad():
+
         output = model.generate(
             **inputs,
-            max_new_tokens=100,
+            max_new_tokens=120,
             temperature=0.0
         )
 
     result = tokenizer.decode(output[0], skip_special_tokens=True)
+
     return result
 
 
-# ================================
-# TRAIN / EVALUATE RAG
-# ================================
+# ===============================
+# MAIN RAG PIPELINE
+# ===============================
 
 def train_bge_llama3():
 
     print("="*60)
-    print("Running BGE + LLM RAG pipeline")
+    print("Running BGE + Mistral RAG pipeline")
     print("Device:", device)
     print("="*60)
 
@@ -119,38 +138,73 @@ def train_bge_llama3():
 
     texts = df["text"].astype(str).tolist()
 
-    # Load embedding model
+    # limit for demo
+    texts = texts[:2000]
+
+    # ===============================
+    # EMBEDDINGS
+    # ===============================
+
     embedder = BGEEmbedder()
 
     print("Generating embeddings...")
 
     embeddings = embedder.encode(texts)
 
-    # Build FAISS index
+    # ===============================
+    # BUILD FAISS INDEX
+    # ===============================
+
     dim = embeddings.shape[1]
+
+    print("Building FAISS index...")
 
     index = faiss.IndexFlatL2(dim)
     index.add(embeddings)
 
-    print("FAISS index built")
+    print("FAISS index ready")
 
-    # Load LLM
+    # ===============================
+    # LOAD LLM
+    # ===============================
+
     tokenizer, model = load_llm()
+
+    # ===============================
+    # RETRIEVAL + CLASSIFICATION
+    # ===============================
 
     predictions = []
 
-    for text in tqdm(texts[:200]):   # limit for speed
+    for i, text in enumerate(tqdm(texts, desc="RAG inference")):
 
-        result = classify_text(tokenizer, model, text)
+        query_embedding = embedder.encode([text])
+
+        D, I = index.search(query_embedding, k=3)
+
+        retrieved_context = "\n".join([texts[idx] for idx in I[0]])
+
+        result = classify_text(
+            tokenizer,
+            model,
+            text,
+            retrieved_context
+        )
 
         predictions.append({
             "text": text,
             "prediction": result
         })
 
+    # ===============================
+    # SAVE RESULTS
+    # ===============================
+
     os.makedirs("results/rag", exist_ok=True)
 
-    with open("results/rag/bge_llm_predictions.json", "w") as f:
+    output_path = "results/rag/bge_mistral_predictions.json"
+
+    with open(output_path, "w") as f:
         json.dump(predictions, f, indent=2)
 
-    print("Results saved to results/rag/bge_llm_predictions.json")
+    print("Results saved to:", output_path)
