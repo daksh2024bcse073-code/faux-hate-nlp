@@ -5,33 +5,36 @@ import faiss
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-from transformers import (
-    AutoTokenizer,
-    AutoModel,
-    AutoModelForCausalLM,
-    BitsAndBytesConfig
-)
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+from transformers import AutoTokenizer, AutoModel
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import f1_score
 
 
-# ===============================
-# BGE EMBEDDING MODEL (CPU)
-# ===============================
+device = "cpu"
+
+
+# =========================================
+# BGE EMBEDDINGS
+# =========================================
 
 class BGEEmbedder:
 
     def __init__(self, model_name="BAAI/bge-base-en-v1.5"):
-        print("Loading BGE embedding model on CPU...")
+
+        print("Loading BGE embedding model...")
+
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = AutoModel.from_pretrained(model_name).to("cpu")
+        self.model = AutoModel.from_pretrained(model_name).to(device)
+
         self.model.eval()
 
     def encode(self, texts, batch_size=32):
 
         embeddings = []
 
-        for i in tqdm(range(0, len(texts), batch_size), desc="Embedding batches"):
+        for i in tqdm(range(0, len(texts), batch_size)):
+
             batch = texts[i:i+batch_size]
 
             inputs = self.tokenizer(
@@ -40,171 +43,154 @@ class BGEEmbedder:
                 truncation=True,
                 max_length=180,
                 return_tensors="pt"
-            ).to("cpu")
+            ).to(device)
 
             with torch.no_grad():
                 outputs = self.model(**inputs)
 
-            batch_embeddings = outputs.last_hidden_state[:,0].cpu().numpy()
-            embeddings.append(batch_embeddings)
+            emb = outputs.last_hidden_state[:,0].cpu().numpy()
+
+            embeddings.append(emb)
 
         embeddings = np.vstack(embeddings)
 
         return embeddings
 
 
-# ===============================
-# LOAD MISTRAL (LLM)
-# ===============================
-
-def load_llm():
-
-    model_name = "mistralai/Mistral-7B-Instruct-v0.2"
-
-    print("Loading Mistral LLM...")
-
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_compute_dtype=torch.float16,
-        bnb_4bit_use_double_quant=True,
-        bnb_4bit_quant_type="nf4"
-    )
-
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        quantization_config=bnb_config,
-        device_map="auto"
-    )
-
-    return tokenizer, model
-
-
-# ===============================
-# LLM CLASSIFICATION
-# ===============================
-
-def classify_text(tokenizer, model, text, context):
-
-    prompt = f"""
-You are a text classifier.
-
-Use the retrieved context to help classify the text.
-
-Context:
-{context}
-
-Text:
-{text}
-
-Return JSON format:
-
-{{
-"Fake": 0 or 1,
-"Hate": 0 or 1,
-"Target": "I" or "O" or "R",
-"Severity": "L" or "M" or "H"
-}}
-"""
-
-    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-
-    with torch.no_grad():
-
-        output = model.generate(
-            **inputs,
-            max_new_tokens=120,
-            temperature=0.0
-        )
-
-    result = tokenizer.decode(output[0], skip_special_tokens=True)
-
-    return result
-
-
-# ===============================
-# MAIN RAG PIPELINE
-# ===============================
+# =========================================
+# MAIN FUNCTION
+# =========================================
 
 def train_bge_llama3():
 
     print("="*60)
-    print("Running BGE + Mistral RAG pipeline")
-    print("Device:", device)
+    print("FAST BGE Retrieval Pipeline")
     print("="*60)
 
-    df = pd.read_csv("data/splits/test.csv")
-
-    texts = df["text"].astype(str).tolist()
-
-    # limit for demo
-    texts = texts[:2000]
-
-    # ===============================
-    # EMBEDDINGS
-    # ===============================
+    train_df = pd.read_csv("data/splits/train.csv")
+    val_df   = pd.read_csv("data/splits/val.csv")
+    test_df  = pd.read_csv("data/splits/test.csv")
 
     embedder = BGEEmbedder()
 
-    print("Generating embeddings...")
+    print("Encoding train set...")
+    train_embeddings = embedder.encode(train_df["text"].astype(str).tolist())
 
-    embeddings = embedder.encode(texts)
+    print("Encoding val set...")
+    val_embeddings = embedder.encode(val_df["text"].astype(str).tolist())
 
-    # ===============================
-    # BUILD FAISS INDEX
-    # ===============================
+    print("Encoding test set...")
+    test_embeddings = embedder.encode(test_df["text"].astype(str).tolist())
 
-    dim = embeddings.shape[1]
+    # =========================================
+    # FAISS INDEX
+    # =========================================
 
-    print("Building FAISS index...")
+    dim = train_embeddings.shape[1]
 
     index = faiss.IndexFlatL2(dim)
-    index.add(embeddings)
+    index.add(train_embeddings)
 
-    print("FAISS index ready")
+    print("FAISS index built.")
 
-    # ===============================
-    # LOAD LLM
-    # ===============================
+    # =========================================
+    # CLASSIFIERS
+    # =========================================
 
-    tokenizer, model = load_llm()
+    print("Training classifiers...")
 
-    # ===============================
-    # RETRIEVAL + CLASSIFICATION
-    # ===============================
+    fake_clf = LogisticRegression(max_iter=1000)
+    hate_clf = LogisticRegression(max_iter=1000)
 
-    predictions = []
+    fake_clf.fit(train_embeddings, train_df["Fake"])
+    hate_clf.fit(train_embeddings, train_df["Hate"])
 
-    for i, text in enumerate(tqdm(texts, desc="RAG inference")):
+    # Train Target / Severity only on hate samples
+    hate_mask = train_df["Hate"] == 1
 
-        query_embedding = embedder.encode([text])
+    target_clf = LogisticRegression(max_iter=1000)
+    severity_clf = LogisticRegression(max_iter=1000)
 
-        D, I = index.search(query_embedding, k=3)
+    target_clf.fit(
+        train_embeddings[hate_mask],
+        train_df.loc[hate_mask, "Target"]
+    )
 
-        retrieved_context = "\n".join([texts[idx] for idx in I[0]])
+    severity_clf.fit(
+        train_embeddings[hate_mask],
+        train_df.loc[hate_mask, "Severity"]
+    )
 
-        result = classify_text(
-            tokenizer,
-            model,
-            text,
-            retrieved_context
-        )
+    # =========================================
+    # PREDICTIONS
+    # =========================================
 
-        predictions.append({
-            "text": text,
-            "prediction": result
-        })
+    print("Running predictions...")
 
-    # ===============================
+    fake_pred = fake_clf.predict(test_embeddings)
+    hate_pred = hate_clf.predict(test_embeddings)
+
+    target_pred = []
+    severity_pred = []
+
+    for i in range(len(test_embeddings)):
+
+        if hate_pred[i] == 1:
+
+            t = target_clf.predict(test_embeddings[i].reshape(1,-1))[0]
+            s = severity_clf.predict(test_embeddings[i].reshape(1,-1))[0]
+
+        else:
+
+            t = "None"
+            s = "None"
+
+        target_pred.append(t)
+        severity_pred.append(s)
+
+    # =========================================
+    # METRICS
+    # =========================================
+
+    print("\nEvaluation")
+
+    fake_f1 = f1_score(test_df["Fake"], fake_pred, average="macro")
+    hate_f1 = f1_score(test_df["Hate"], hate_pred, average="macro")
+
+    print("Fake Macro F1:", fake_f1)
+    print("Hate Macro F1:", hate_f1)
+
+    mask = test_df["Hate"] == 1
+
+    target_f1 = f1_score(
+        test_df.loc[mask, "Target"],
+        np.array(target_pred)[mask],
+        average="macro"
+    )
+
+    severity_f1 = f1_score(
+        test_df.loc[mask, "Severity"],
+        np.array(severity_pred)[mask],
+        average="macro"
+    )
+
+    print("Target Macro F1:", target_f1)
+    print("Severity Macro F1:", severity_f1)
+
+    # =========================================
     # SAVE RESULTS
-    # ===============================
+    # =========================================
 
     os.makedirs("results/rag", exist_ok=True)
 
-    output_path = "results/rag/bge_mistral_predictions.json"
+    results = {
+        "Fake_F1": float(fake_f1),
+        "Hate_F1": float(hate_f1),
+        "Target_F1": float(target_f1),
+        "Severity_F1": float(severity_f1)
+    }
 
-    with open(output_path, "w") as f:
-        json.dump(predictions, f, indent=2)
+    with open("results/rag/bge_llama3_results.json","w") as f:
+        json.dump(results,f,indent=4)
 
-    print("Results saved to:", output_path)
+    print("\nResults saved to results/rag/bge_llama3_results.json")
