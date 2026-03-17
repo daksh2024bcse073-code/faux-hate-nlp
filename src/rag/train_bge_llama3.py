@@ -1,7 +1,6 @@
 import os
 import json
 import torch
-import faiss
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
@@ -10,26 +9,23 @@ from transformers import AutoTokenizer, AutoModel
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import f1_score
 
-
 device = "cpu"
 
 
 # =========================================
-# BGE EMBEDDINGS
+# BGE EMBEDDER (FAST VERSION)
 # =========================================
 
 class BGEEmbedder:
 
     def __init__(self, model_name="BAAI/bge-base-en-v1.5"):
 
-        print("Loading BGE embedding model...")
-
+        print("Loading BGE model...")
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.model = AutoModel.from_pretrained(model_name).to(device)
-
         self.model.eval()
 
-    def encode(self, texts, batch_size=32):
+    def encode(self, texts, batch_size=128):   # 🔥 increased batch size
 
         embeddings = []
 
@@ -41,7 +37,7 @@ class BGEEmbedder:
                 batch,
                 padding=True,
                 truncation=True,
-                max_length=180,
+                max_length=128,
                 return_tensors="pt"
             ).to(device)
 
@@ -49,22 +45,36 @@ class BGEEmbedder:
                 outputs = self.model(**inputs)
 
             emb = outputs.last_hidden_state[:,0].cpu().numpy()
-
             embeddings.append(emb)
 
-        embeddings = np.vstack(embeddings)
-
-        return embeddings
+        return np.vstack(embeddings)
 
 
 # =========================================
-# MAIN FUNCTION
+# LOAD OR CACHE EMBEDDINGS
+# =========================================
+
+def get_embeddings(embedder, texts, path):
+
+    if os.path.exists(path):
+        print(f"Loading cached embeddings: {path}")
+        return np.load(path)
+
+    print(f"Computing embeddings: {path}")
+    emb = embedder.encode(texts)
+
+    np.save(path, emb)
+    return emb
+
+
+# =========================================
+# MAIN
 # =========================================
 
 def train_bge_llama3():
 
     print("="*60)
-    print("FAST BGE Retrieval Pipeline")
+    print("FAST BGE Pipeline (30-40 min version)")
     print("="*60)
 
     train_df = pd.read_csv("data/splits/train.csv")
@@ -73,25 +83,13 @@ def train_bge_llama3():
 
     embedder = BGEEmbedder()
 
-    print("Encoding train set...")
-    train_embeddings = embedder.encode(train_df["text"].astype(str).tolist())
-
-    print("Encoding val set...")
-    val_embeddings = embedder.encode(val_df["text"].astype(str).tolist())
-
-    print("Encoding test set...")
-    test_embeddings = embedder.encode(test_df["text"].astype(str).tolist())
-
     # =========================================
-    # FAISS INDEX
+    # EMBEDDINGS (CACHED)
     # =========================================
 
-    dim = train_embeddings.shape[1]
-
-    index = faiss.IndexFlatL2(dim)
-    index.add(train_embeddings)
-
-    print("FAISS index built.")
+    train_emb = get_embeddings(embedder, train_df["text"].astype(str).tolist(), "train_emb.npy")
+    val_emb   = get_embeddings(embedder, val_df["text"].astype(str).tolist(), "val_emb.npy")
+    test_emb  = get_embeddings(embedder, test_df["text"].astype(str).tolist(), "test_emb.npy")
 
     # =========================================
     # CLASSIFIERS
@@ -102,24 +100,26 @@ def train_bge_llama3():
     fake_clf = LogisticRegression(max_iter=1000)
     hate_clf = LogisticRegression(max_iter=1000)
 
-    fake_clf.fit(train_embeddings, train_df["Fake"])
-    hate_clf.fit(train_embeddings, train_df["Hate"])
+    fake_clf.fit(train_emb, train_df["Fake"])
+    hate_clf.fit(train_emb, train_df["Hate"])
 
-    # Train Target / Severity only on hate samples
+    # =========================================
+    # TARGET / SEVERITY (FIXED NaN)
+    # =========================================
+
     hate_mask = train_df["Hate"] == 1
+
+    target_data = train_df.loc[hate_mask].dropna(subset=["Target"])
+    severity_data = train_df.loc[hate_mask].dropna(subset=["Severity"])
+
+    target_emb = train_emb[target_data.index]
+    severity_emb = train_emb[severity_data.index]
 
     target_clf = LogisticRegression(max_iter=1000)
     severity_clf = LogisticRegression(max_iter=1000)
 
-    target_clf.fit(
-        train_embeddings[hate_mask],
-        train_df.loc[hate_mask, "Target"]
-    )
-
-    severity_clf.fit(
-        train_embeddings[hate_mask],
-        train_df.loc[hate_mask, "Severity"]
-    )
+    target_clf.fit(target_emb, target_data["Target"])
+    severity_clf.fit(severity_emb, severity_data["Severity"])
 
     # =========================================
     # PREDICTIONS
@@ -127,21 +127,20 @@ def train_bge_llama3():
 
     print("Running predictions...")
 
-    fake_pred = fake_clf.predict(test_embeddings)
-    hate_pred = hate_clf.predict(test_embeddings)
+    fake_pred = fake_clf.predict(test_emb)
+    hate_pred = hate_clf.predict(test_emb)
 
     target_pred = []
     severity_pred = []
 
-    for i in range(len(test_embeddings)):
+    for i in range(len(test_emb)):
 
         if hate_pred[i] == 1:
 
-            t = target_clf.predict(test_embeddings[i].reshape(1,-1))[0]
-            s = severity_clf.predict(test_embeddings[i].reshape(1,-1))[0]
+            t = target_clf.predict(test_emb[i].reshape(1,-1))[0]
+            s = severity_clf.predict(test_emb[i].reshape(1,-1))[0]
 
         else:
-
             t = "None"
             s = "None"
 
@@ -157,10 +156,10 @@ def train_bge_llama3():
     fake_f1 = f1_score(test_df["Fake"], fake_pred, average="macro")
     hate_f1 = f1_score(test_df["Hate"], hate_pred, average="macro")
 
-    print("Fake Macro F1:", fake_f1)
-    print("Hate Macro F1:", hate_f1)
+    print("Fake F1:", fake_f1)
+    print("Hate F1:", hate_f1)
 
-    mask = test_df["Hate"] == 1
+    mask = (test_df["Hate"] == 1) & test_df["Target"].notna() & test_df["Severity"].notna()
 
     target_f1 = f1_score(
         test_df.loc[mask, "Target"],
@@ -174,8 +173,8 @@ def train_bge_llama3():
         average="macro"
     )
 
-    print("Target Macro F1:", target_f1)
-    print("Severity Macro F1:", severity_f1)
+    print("Target F1:", target_f1)
+    print("Severity F1:", severity_f1)
 
     # =========================================
     # SAVE RESULTS
@@ -191,6 +190,6 @@ def train_bge_llama3():
     }
 
     with open("results/rag/bge_llama3_results.json","w") as f:
-        json.dump(results,f,indent=4)
+        json.dump(results, f, indent=4)
 
-    print("\nResults saved to results/rag/bge_llama3_results.json")
+    print("\nSaved → results/rag/bge_llama3_results.json")
