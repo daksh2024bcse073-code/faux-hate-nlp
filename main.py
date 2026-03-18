@@ -10,6 +10,7 @@ from train_xlmroberta import train_xlmroberta
 from train_deberta import train_deberta
 from src.rag.train_bge_llama3 import train_bge_llama3
 from src.rag.train_colbert_mixtral import train_colbert_mixtral
+from src.rag.train_e5_mistral import train_e5_mistral
 
 def main():
 
@@ -18,7 +19,7 @@ def main():
     parser.add_argument(
         "--model",
         type=str,
-        choices=["roberta","xlmroberta","deberta","bge_llama3","colbert_mixtral"],
+        choices=["roberta","xlmroberta","deberta","bge_llama3","colbert_mixtral","e5_mistral"],
         required=True
     )
 
@@ -43,5 +44,8 @@ def main():
     elif args.model == "colbert_mixtral":
         train_colbert_mixtral()
 
+    elif args.model == "e5_mistral":
+    train_e5_mistral()
+    
 if __name__ == "__main__":
     main()
