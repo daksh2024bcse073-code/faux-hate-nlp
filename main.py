@@ -9,7 +9,7 @@ from train_roberta import train_roberta
 from train_xlmroberta import train_xlmroberta
 from train_deberta import train_deberta
 from src.rag.train_bge_llama3 import train_bge_llama3
-
+from src.rag.train_colbert_mixtral import train_colbert_mixtral
 
 def main():
 
