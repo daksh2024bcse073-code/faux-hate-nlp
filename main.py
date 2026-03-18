@@ -18,7 +18,7 @@ def main():
     parser.add_argument(
         "--model",
         type=str,
-        choices=["roberta", "xlmroberta", "deberta", "bge_llama3"],
+        choices=["roberta","xlmroberta","deberta","bge_llama3","colbert_mixtral"],
         required=True
     )
 
@@ -40,6 +40,8 @@ def main():
     elif args.model == "bge_llama3":
         train_bge_llama3()
 
+    elif args.model == "colbert_mixtral":
+        train_colbert_mixtral()
 
 if __name__ == "__main__":
     main()
