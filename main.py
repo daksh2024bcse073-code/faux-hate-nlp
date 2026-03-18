@@ -45,7 +45,7 @@ def main():
         train_colbert_mixtral()
 
     elif args.model == "e5_mistral":
-    train_e5_mistral()
+        train_e5_mistral()
     
 if __name__ == "__main__":
     main()
